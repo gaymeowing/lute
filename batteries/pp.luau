@@ -1,7 +1,21 @@
-local isPrimitiveType = { string = true, number = true, boolean = true }
 
 type ExistingOptions = {
 	rawStrings: boolean?,
+}
+
+local isPrimitiveType = { string = true, number = true, boolean = true }
+
+local typeSortOrder: { [string]: number } = {
+	["boolean"] = 1,
+	["number"] = 2,
+	["string"] = 3,
+	["function"] = 4,
+	["vector"] = 5,
+	["buffer"] = 6,
+	["thread"] = 7,
+	["table"] = 8,
+	["userdata"] = 9,
+	["nil"] = 10,
 }
 
 local function isPrimitiveArray(array: { [unknown]: unknown }): boolean
@@ -23,28 +37,32 @@ local function isPrimitiveArray(array: { [unknown]: unknown }): boolean
 	return len == max
 end
 
-local function formatValue(value: unknown, options: ExistingOptions?)
+local function getFormattedAdress(t: {}): string
+	return `table<({t})>`
+end
+
+local function formatValue(value: unknown, options: ExistingOptions?): string
 	if type(value) == "table" then
-		return "table" -- simple representation for table values
+		return getFormattedAdress(value) -- simple representation for table values
 	elseif type(value) ~= "string" then
 		return tostring(value)
 	end
 
-	if options ~= nil and options.rawStrings == true then
+	if options and options.rawStrings then
 		return `"{value}"`
-	else
-		return string.format("%q", value)
 	end
+	return string.format("%q", value)
 end
 
-local function formatKey(key: unknown, seq: boolean)
+local function formatKey(key: unknown, seq: boolean): string
 	if seq then
 		return ""
 	end
 
 	if type(key) == "table" then
-		return "[table] = " -- add handling for table keys
-	elseif type(key) ~= "string" then
+		return `[{getFormattedAdress(key)}] = ` -- TODO: handling for table keys
+	end
+	if type(key) ~= "string" then
 		return `[{tostring(key)}] =`
 	end
 
@@ -52,29 +70,23 @@ local function formatKey(key: unknown, seq: boolean)
 	if string.match(key, "^[%a_][%w_]-$") == key then
 		return `{key} = `
 	end
-
+	
 	return `[{string.format("%q", key)}] = `
 end
 
-local typeSortOrder: { [string]: number } = {
-	["boolean"] = 1,
-	["number"] = 2,
-	["string"] = 3,
-	["function"] = 4,
-	["vector"] = 5,
-	["buffer"] = 6,
-	["thread"] = 7,
-	["table"] = 8,
-	["userdata"] = 9,
-	["nil"] = 10,
-}
+local function isEmpty(t: { [unknown]: unknown }): boolean
+	for _ in t do
+		return false
+	end
+	return true
+end
 
 local function traverseTable(
 	dataTable: { [unknown]: unknown },
 	seen: { [unknown]: boolean },
 	indent: number,
 	options: ExistingOptions?
-)
+): string
 	local output = ""
 	local indentStr = string.rep("  ", indent)
 
@@ -111,6 +123,7 @@ local function traverseTable(
 		end
 
 		local value = dataTable[key]
+
 		if type(value) ~= "table" then
 			output = `{output}{indentStr}{formatKey(key, inSequence)}{formatValue(value, options)},\n`
 			continue
@@ -118,32 +131,25 @@ local function traverseTable(
 
 		-- prevents self-referential tables from looping infinitely
 		if seen[value] then
-			output = `{output}{indentStr}{formatKey(key, inSequence)}[Circular Reference],\n`
+			output = `{output}{indentStr}{formatKey(key, inSequence)}[Circular Reference <({value})>],\n`
 			continue
+		else
+			seen[value] = true
 		end
 
-		seen[value] = true
-
-		local hasItems = false
-		for k, val in value do
-			hasItems = true
-			break
-		end
-
-		if not hasItems then
+		if isEmpty(value :: { [unknown]: unknown }) then
 			output = string.format("%s%s%s{},\n", output, indentStr, formatKey(key, inSequence))
 			continue
 		end
 
 		-- FIXME(luau): `{[unknown]: unknown} should be treated identically to `table`
 		if isPrimitiveArray(value :: { [unknown]: unknown }) then -- collapse primitive arrays
-			local valueLen = #value
-			local outputConcatTbl = table.create(valueLen)
+			local outputConcatTbl = table.create(#value) :: { string }
 
 			for valueIndex, valueInArray in value :: { unknown } do
 				outputConcatTbl[valueIndex] = formatValue(valueInArray)
 			end
-
+			
 			output = string.format("%s%s%s{%*},\n", output, indentStr, formatKey(key, inSequence), table.concat(outputConcatTbl, ", "))
 			continue
 		end
@@ -163,8 +169,8 @@ local function traverseTable(
 	return output
 end
 
-return function(data: unknown, options: ExistingOptions?)
-	options = if options then options else {} :: ExistingOptions
+return function(data: unknown, options: ExistingOptions?): string
+	options = options or {} :: any
 
 	-- if it's not a primitive, we'll pretty print it as a value
 	if type(data) ~= "table" then
@@ -172,5 +178,5 @@ return function(data: unknown, options: ExistingOptions?)
 	end
 
 	-- FIXME(luau): `{[unknown]: unknown} should be treated identically to `table`
-	return `\{\n{traverseTable(data :: { [unknown]: unknown }, { [data :: unknown] = true }, 1, options)}\}`
+	return `\{\n{traverseTable(data, { [data] = true }, 1, options)}\}`
 end
