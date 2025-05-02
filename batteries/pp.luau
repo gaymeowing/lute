@@ -4,31 +4,29 @@ type ExistingOptions = {
 	rawStrings: boolean?,
 }
 
-local function isPrimitiveArray(array: { [unknown]: unknown })
-	local max, n = 0, 0
+local function isPrimitiveArray(array: { [unknown]: unknown }): boolean
+	local max, len = 0, #array
 
 	for key, value in array do
-		if typeof(key) ~= "number" then
+		if type(key) ~= "number" then
 			return false
-		end
-		if key <= 0 then
+		elseif key <= 0 then
 			return false
-		end
-		if not isPrimitiveType[typeof(value)] then
+		-- userdatas arent primitives
+		elseif not isPrimitiveType[type(value)] then
 			return false
 		end
 
-		max = if key > max then key else max
-		n = n + 1
+		max = math.max(key, max)
 	end
 
-	return n == max
+	return len == max
 end
 
 local function formatValue(value: unknown, options: ExistingOptions?)
-	if typeof(value) == "table" then
+	if type(value) == "table" then
 		return "table" -- simple representation for table values
-	elseif typeof(value) ~= "string" then
+	elseif type(value) ~= "string" then
 		return tostring(value)
 	end
 
@@ -44,14 +42,14 @@ local function formatKey(key: unknown, seq: boolean)
 		return ""
 	end
 
-	if typeof(key) == "table" then
+	if type(key) == "table" then
 		return "[table] = " -- add handling for table keys
-	elseif typeof(key) ~= "string" then
+	elseif type(key) ~= "string" then
 		return `[{tostring(key)}] =`
 	end
 
 	-- key is a simple identifier
-	if key:match("^[%a_][%w_]-$") == key then
+	if string.match(key, "^[%a_][%w_]-$") == key then
 		return `{key} = `
 	end
 
@@ -83,8 +81,8 @@ local function traverseTable(
 	local keys = {}
 
 	-- Collect all keys, not just primitives
-	for key, _ in dataTable do
-		keys[#keys + 1] = key
+	for key in dataTable do
+		table.insert(keys, key)
 	end
 
 	table.sort(keys, function(a: string, b: string): boolean
@@ -94,7 +92,7 @@ local function traverseTable(
 			return typeSortOrder[typeofTableA] < typeSortOrder[typeofTableB]
 		end
 
-		if typeof(a) == "number" and typeof(b) == "number" then
+		if type(a) == "number" and type(b) == "number" then
 			return a < b
 		end
 
@@ -105,7 +103,7 @@ local function traverseTable(
 	local previousKey = 0
 
 	for idx, key in keys do
-		if typeof(key) == "number" and key > 0 and key - 1 == previousKey then
+		if type(key) == "number" and key > 0 and key - 1 == previousKey then
 			previousKey = key
 			inSequence = true
 		else
@@ -113,7 +111,7 @@ local function traverseTable(
 		end
 
 		local value = dataTable[key]
-		if typeof(value) ~= "table" then
+		if type(value) ~= "table" then
 			output = `{output}{indentStr}{formatKey(key, inSequence)}{formatValue(value, options)},\n`
 			continue
 		end
@@ -139,18 +137,14 @@ local function traverseTable(
 
 		-- FIXME(luau): `{[unknown]: unknown} should be treated identically to `table`
 		if isPrimitiveArray(value :: { [unknown]: unknown }) then -- collapse primitive arrays
-			local valueAsArray = value :: { unknown }
+			local valueLen = #value
+			local outputConcatTbl = table.create(valueLen)
 
-			output = string.format("%s%s%s{", output, indentStr, formatKey(key, inSequence))
-
-			for index = 1, #valueAsArray do
-				output ..= formatValue(valueAsArray[index])
-				if index < #valueAsArray then
-					output ..= ", "
-				end
+			for valueIndex, valueInArray in value :: { unknown } do
+				outputConcatTbl[valueIndex] = formatValue(valueInArray)
 			end
 
-			output ..= "},\n"
+			output = string.format("%s%s%s{%*},\n", output, indentStr, formatKey(key, inSequence), table.concat(outputConcatTbl, ", "))
 			continue
 		end
 
@@ -173,10 +167,10 @@ return function(data: unknown, options: ExistingOptions?)
 	options = if options then options else {} :: ExistingOptions
 
 	-- if it's not a primitive, we'll pretty print it as a value
-	if typeof(data) ~= "table" then
+	if type(data) ~= "table" then
 		return formatValue(data, options)
 	end
 
 	-- FIXME(luau): `{[unknown]: unknown} should be treated identically to `table`
-	return "{\n" .. traverseTable(data :: { [unknown]: unknown }, { [data :: unknown] = true }, 1, options) .. "}"
+	return `\{\n{traverseTable(data :: { [unknown]: unknown }, { [data :: unknown] = true }, 1, options)}\}`
 end
